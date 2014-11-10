@@ -15,69 +15,45 @@
  ####### #    #  ####  # #    # ###### ###### #    # # #    #  ####
 							Hab Edition
                        By Spencer Whitehead
+                       Fixed by Will Xyen
 					  
 If you change anything here or find anything wrong with your changes, please record everything in the Changelog and
 the TODO. It just really makes everything easier for everyone. Additionally, you can message me (See above) to get
 contributor privilages on git, but please please pleease dont push to master until you are 100% sure in all circumstances
 that your fix works. I can create a branch for you while we delegate to QA (Is that a taskforce? That should be a taskforce)
-
-TODO
-Finished - I have marked inefficient code segments with disabled breakpoints, fix these.
-Finished - Use class prototypes and declare the circularlry dependant functions after both classes are written
-Finished - Add a source value for the second bus
-Finished - Fix a bug that causes radiation shields to not drain power properly
-Finished - Fix a bug that causes bus to still read as having power on it after the power source is destroyed
-      NF - Totally in the wrong place, but set up some sort of active server program. It will serve as a placebo, as well as just checking what computers it can see every 10 seconds or so. To do this, give every computer a server (Put something in here to set it up) with a set of return codes. Have the computers update their local tables when they hit an error (Ex: set a local variable to 2 on fail to connect)
-      NF - Fix a bug that causes the user to still be able to use bus 1 as if it is powered so long as they do not release a key (This is probably true for bus 2 also, cannot test yet)
-      NF - Fix a bug that causes the bus watt values to fluctuate while modifying radiation shields (I have NO idea what causes this, kudos if you solve it)
-      NF - Find out why sources other than Hab Reactor cant power primary bus
-	  NF - Maybe find a better way to set up bitmaps than passing x and y to all of them? Excepting this, make good X and Y values. The overeall layout of ENG should stay the same so there is as little confusion as possible
-	 WIP - Create images and make it draw things that aren't just text
-Finished - Make a debouncer for the keys
-	  NF - Make coolants do stuff
-Finished - Clean up class functions using seperate source files
-     WIP - Use a unique ID to track when the database was last changed
-
-CHANGELOG
-8/28/14  - Did everything that isn't documented because I started a changelog way too late
-8/28/14  - Added a Changelog
-8/28/14  - Added offline mode (Enter offline by setting the OFFLINE flag to 1)				
-8/29/14  - Removed 3 functions and instead used class prototypes to save 9 lines of code and much efficiency (As per earlier TODO)
-9/4/14   - Made various changes for readibility on git
-9/8/14   - Saved about 1000 cycles per tick at the cost of readability (Which is unnessecary, we only need to feed raw data to Allegro)
-9/8/14   - Added support for destroyed module. When reported as destroyed, a module will be unable to be heated, cooled, or powered.
-9/8/14   - Fixed multiple bugs surrounding destroyed power source module (See TODO)
-9/9/14   - Fixed radiation shield power bug
-9/9/14   - Added a source value to the secondary bus
-9/9/14   - Against my better judgement, I have decided we will be using Allegro. SDL is too complicated, and everyone in Lisgar ICS alreeady knows Allegro, making this easier
-9/12/14  - Allegro has been implemented
-9/19/14  - Added framework required for displaying images with Allegro (No images yet, the code is commented ATM)
-9/20/14  - Cleaned up the class structure and pre-main code a LOT
-9/20/14  - Made program draw things rather than just print text
-9/21/14  - Added a debouncer
-9/21/14  - Put classes in their own headers
-9/23/14  - Tried multiple ways to put functions with class headers, did not work, 3/10, would not reccomend to a friend
-10/3/14  - Hey past me, you are dumb. I did classes for real now and its better
-10/4/14  - After many many many many hours of work, I've finished the whole classes thing. It's now so much easier to read overall.
-10/18/14 - Added ifndef guards to allow for machines without SQLAPI to run the offline mode
 */
 
-#include <allegro.h>			//Graphics
-#include <winalleg.h>			//SYSTEMTIME
-#include <iostream>				//Standard I/O
-#include <fstream>				//File I/O
-#include <string>				//C++ std::string manipulations
-#include <map>					//Maps to handle keyboard input
-#include <SQLAPI.h>				//Database I/O
-#include "main.h"
+#include "xSDL/xSDL_bitmap.h"	//Graphics
+#include "xSDL/xSDL_allegro_wrapper.h"
 
-//#define OFFLINE 				//When this flag is set, the program is running in offline mode (Will not attempt to connect to Server)
+// Event Handler
+char processEvents(SDL_Window* window);
+
+// Window
+xSDL_Window *target_window;
+
+// fix godamn overwrite
+#define WIN32_LEAN_AND_MEAN
+#define BITMAP WINDOWS_BITMAP
+	#include <windows.h>
+#define WINDOWS_RGB(r,g,b)  ((COLORREF)(((BYTE)(r)|((WORD)((BYTE)(g))<<8))|(((DWORD)(BYTE)(b))<<16)))
+#undef BITMAP
+
+
+#define OFFLINE 				//When this flag is set, the program is running in offline mode (Will not attempt to connect to Server)
 //#define FULLSCREEN				//When this flag is set, the program will run in fullscreen mode. Otherwise, it will run in windowed mode. Fullscreen mode does not work on all computers
 
+#ifndef OFFLINE
+	#include <SQLAPI.h>				//Database I/O
+	SAConnection con;
+	SACommand cmd;
+#endif
+
+#include "main.h"
 std::vector<Module> module(NUM_MODULES, Module());
 std::vector<Bus> bus(NUM_BUSES, Bus());
-int radPC;				
-int rcon_lvl;				
+int radPC;
+int rcon_lvl;
 int update_id = 0;
 Mode mode;
 SYSTEMTIME t;						//The program's local time, used when updating
@@ -87,8 +63,6 @@ double time1;
 double time2;
 double d_time;
 std::string startType = "";
-SAConnection con;
-SACommand cmd;
 BITMAP *buffer;
 
 void displayModule(Module);
@@ -99,9 +73,8 @@ int findByName(std::string);				//Returns the ID of a module given its truncated
 void updateDatabase(Module);		//Update the SQL database with all the information about the given module
 void updateFromDatabase(int);		//Read in the database. Mode 0 reads in piloting information only, mode 1 reads the whole thing
 int getUpdateID();					//Returns the current engineering update ID
-void comment();
 
-int main() {
+int main(int argc, char *argv[]) {
 	#ifndef OFFLINE
 		std::ifstream inFile ("serverLocation.txt");
 		std::string serverComputer;
@@ -116,13 +89,13 @@ int main() {
 			system("pause");
 			exit(1);
 		}
+		int radPC = 0;
+		int rcon_lvl = 0;
 	#endif 
 
 	//Initialize all local variables
 	char in = ' ';                                              //Holds user input
 	d_time = 500;												//Number of miliseconds between updates
-	int radPC = 0;
-	int rcon_lvl = 0;
 	std::string input = "";
 
 	//Initialize the Key Input map
@@ -145,44 +118,42 @@ int main() {
 	key_map['n'] = 16;																			//N = Engine Accelerator 4
 	key_map['o'] = 17;																			//O = Ion Engine 4
 
-	allegro_init();
-	set_color_depth(32);
 	
-	#ifdef 
-		set_gfx_mode(GFX_AUTODETECT_FULLSCREEN, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0);
+	target_window = new xSDL_Window("ENG-hab", SCREEN_WIDTH, SCREEN_HEIGHT,
+	#ifdef FULLSCREEN
+		true
 	#else
-		set_gfx_mode(GFX_AUTODETECT_WINDOWED, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0);
+		false
 	#endif
-	
-	install_keyboard();
-	buffer = create_bitmap(SCREEN_W, SCREEN_H);
-
+	);
 	//Set up all the module information
-	module[0] = Module("Habitat Reactor", "HabitatReactor", 0, 0, 10000, 100, 100);
-	module[1] = Module("Fuel Cell", "FuelCell", 1, 10000);
-	module[2] = Module("Battery", "Battery", 2, 10000);
-	module[3] = Module("Radiation Shield 1", "RadiationShield1", 3, 10000);
-	module[4] = Module("Radiation Shield 2", "RadiationShield2", 4, 10000);
-	module[5] = Module("Artificial Gravity", "ArtificialGravity", 5, 10000);
-	module[6] = Module("Reactor Containment 1", "ReactorContainment1", 6, 5000);
-	module[7] = Module("Reactor Containment 2", "ReactorContainment2", 7, 5000);
-	module[8] = Module("RCS Pressure System", "RCSPressureSystem", 8, 5000);
-	module[9] = Module("That Other One", "ThatOtherOne", 9, 10000);
-	module[10] = Module("Engine Accelerator 1", "EngineAccelerator1", 10, 10000);
-	module[11] = Module("IonEngine1", "IonEngine1", 11, 10000);
-	module[12] = Module("Engine Accelerator 2", "EngineAccelerator2", 12, 10000);
-	module[13] = Module("IonEngine2", "IonEngine2", 13, 10000);
-	module[14] = Module("Engine Accelerator 3", "EngineAccelerator3", 14, 10000);
-	module[15] = Module("IonEngine3", "IonEngine3", 15, 10000);
-	module[16] = Module("Engine Accelerator 4", "EngineAccelerator4", 16, 10000);
-	module[17] = Module("IonEngine4", "IonEngine4", 17, 10000);
+	module[0] = Module("Habitat Reactor", "HabitatReactor", 0, 0, 10000, 100, 100, target_window->renderer);
+	module[1] = Module("Fuel Cell", "FuelCell", 1, 10000, target_window->renderer);
+	module[2] = Module("Battery", "Battery", 2, 10000, target_window->renderer);
+	module[3] = Module("Radiation Shield 1", "RadiationShield1", 3, 10000, target_window->renderer);
+	module[4] = Module("Radiation Shield 2", "RadiationShield2", 4, 10000, target_window->renderer);
+	module[5] = Module("Artificial Gravity", "ArtificialGravity", 5, 10000, target_window->renderer);
+	module[6] = Module("Reactor Containment 1", "ReactorContainment1", 6, 5000, target_window->renderer);
+	module[7] = Module("Reactor Containment 2", "ReactorContainment2", 7, 5000, target_window->renderer);
+	module[8] = Module("RCS Pressure System", "RCSPressureSystem", 8, 5000, target_window->renderer);
+	module[9] = Module("That Other One", "ThatOtherOne", 9, 10000, target_window->renderer);
+	module[10] = Module("Engine Accelerator 1", "EngineAccelerator1", 10, 10000, target_window->renderer);
+	module[11] = Module("IonEngine1", "IonEngine1", 11, 10000, target_window->renderer);
+	module[12] = Module("Engine Accelerator 2", "EngineAccelerator2", 12, 10000, target_window->renderer);
+	module[13] = Module("IonEngine2", "IonEngine2", 13, 10000, target_window->renderer);
+	module[14] = Module("Engine Accelerator 3", "EngineAccelerator3", 14, 10000, target_window->renderer);
+	module[15] = Module("IonEngine3", "IonEngine3", 15, 10000, target_window->renderer);
+	module[16] = Module("Engine Accelerator 4", "EngineAccelerator4", 16, 10000, target_window->renderer);
+	module[17] = Module("IonEngine4", "IonEngine4", 17, 10000, target_window->renderer);
 
-	textprintf_ex(screen, font, SCREEN_W / 2 - (text_length(font, "Press H to hot start or C to cold start") / 2), SCREEN_H / 2 - (text_height(font) / 2), makecol(255, 255, 255), makecol(0, 0, 0), "Press H to hot start or C to cold start");
-
+	clear_to_color(target_window->renderer, makecol(0, 0, 0));
+	textprintf_ex(target_window->renderer, NULL, SCREEN_WIDTH / 2 - (text_length(NULL, "Press H to hot start or C to cold start") / 2), SCREEN_HEIGHT / 2 - (text_height(NULL) / 2), makecol(255, 255, 255), NULL, "Press H to hot start or C to cold start");
+	SDL_RenderPresent(target_window->renderer);
 	while(startType == "") {
-		if(key[KEY_H])
+		SDL_PumpEvents();
+		if(target_window->keyboardState[SDL_SCANCODE_H])
 			startType = "h";
-		else if(key[KEY_C])
+		else if(target_window->keyboardState[SDL_SCANCODE_C])
 			startType = "c";
 	}
 
@@ -200,40 +171,24 @@ int main() {
 		system("PAUSE");
 		exit(1);     
 	}
-	
+
 	GetLocalTime(&t);
 	time1 = t.wMilliseconds + (t.wSecond * 1000);
+	std::cout << "Starting loop" << std::endl;
 	do {
-		if(keypressed()) {
-			if(key[KEY_TAB]) 
-				in = '!';
-			else if(key[KEY_PGUP])
-				in = '@';
-			else if(key[KEY_PGDN])
-				in = '#';
-			else if(key[KEY_LEFT])
-				in = '$';
-			else if(key[KEY_RIGHT])
-				in = '%';
-			else if(key[KEY_Q] || key[KEY_ESC])
-				exit(EXIT_SUCCESS);
-			else 
-				in = readkey();
-			
-			input += in;
-			clear_keybuf();
-			rest(10);
-		}
-		else 
-			in = ' ';
-		
-		bool change = update(in);
-		if(change) 
-			draw();
+	    std::cout << "Each Begin" << std::endl;
+    	in = processEvents(target_window->window);
+        std::cout << "Done processing" << std::endl;
+    	input += in;
+
+    	bool change = update(in);
+        std::cout << "Done Update" << std::endl;
+    	if(change)
+    		draw();
+        std::cout << "Done Draw" << std::endl;
 	} while(true);
 	return 0;
 }
-END_OF_MAIN()
 
 bool update(char key_in) {         
 	bool change = false;      
@@ -367,7 +322,7 @@ bool update(char key_in) {
 }
 
 void displayModule(Module m) {
-	masked_blit(m.getSprite(m.getStatus()), buffer, 0, 0, m.getX(), m.getY(), m.getSprite(m.getStatus())->w, m.getSprite(m.getStatus())->h);
+	masked_blit(m.getSprite(m.getStatus()), target_window->renderer, 0, 0, m.getX(), m.getY(), m.getSprite(m.getStatus())->w, m.getSprite(m.getStatus())->h);
 	std::string stats;
 	switch(mode) {
 		case electricity:
@@ -383,7 +338,7 @@ void displayModule(Module m) {
 			//stats = name + " Wire: " + std::to_string(wire) + " Powered: " + std::to_string(powered) + " Temp: " + std::to_string(temp) + " ID: " + std::to_string(id) + " Status: " + std::to_string((int)status);
 			break;
 	}
-	textprintf_ex(buffer, font, m.getX() + ((m.getSprite(m.getStatus())->w - text_length(font, stats.c_str())) / 2), m.getY() + ((m.getSprite(m.getStatus())->h - text_height(font)) / 2), makecol(255, 255, 255), -1, stats.c_str());
+	textprintf_ex(target_window->renderer, NULL, m.getX() + ((m.getSprite(m.getStatus())->w - text_length(NULL, stats.c_str())) / 2), m.getY() + ((m.getSprite(m.getStatus())->h - text_height(NULL)) / 2), makecol(255, 255, 255), NULL, stats.c_str());
 }
 
 void displayBus(Bus b) {
@@ -422,9 +377,9 @@ void displayBus(Bus b) {
 }
 
 void draw() {
-	clear_to_color(buffer, makecol(0, 0, 0));
+	clear_to_color(target_window->renderer, makecol(0, 0, 0));
 	displayBus(bus[0]);
-	blit(buffer, screen, 0, 0, 0, 0, buffer->w, buffer->h);
+	SDL_RenderPresent(target_window->renderer);
 }
 
 int findByName(std::string fName) {
@@ -438,30 +393,34 @@ int findByName(std::string fName) {
 
 void updateDatabase(Module m) {
 	std::string cmd_text = "UPDATE eng SET temp = " + std::to_string(m.getTemp()) + ", wire = " + std::to_string(m.getWire()) + ", powered = " + std::to_string(m.isPowered()) + ", status = " + std::to_string(m.getStatus()) + ", watts = " + std::to_string(m.getWatts()) + " WHERE name = '" + m.getTruncName() + "'";
-	cmd.setConnection(&con);
-	cmd.setCommandText(cmd_text.c_str());
-	cmd.Execute();
-	con.Commit();
+	#ifndef OFFLINE
+		cmd.setConnection(&con);
+		cmd.setCommandText(cmd_text.c_str());
+		cmd.Execute();
+		con.Commit();
+	#endif
 }
 
 void updateFromDatabase(int update_mode) {
 	if(update_mode) {
 		for(int i = 0; i < module.size(); ++i) {
 			std::string cmd_text = "SELECT name, truncName, thresh1, thresh2, temp, wire, powered, status FROM eng WHERE id = " + module[i].getName();
-			cmd.setConnection(&con);
-			cmd.setCommandText(cmd_text.c_str());
-			cmd.Execute();
-			con.Commit();
-			while(cmd.FetchNext()) {
-				module[i].setName((std::string)cmd.Field("name").asString());
-				module[i].setTruncName((std::string)cmd.Field("truncName").asString());
-				module[i].setThresh1((float)cmd.Field("thresh1").asDouble());
-				module[i].setThresh2((float)cmd.Field("thresh2").asDouble());
-				module[i].setTemp((float)cmd.Field("temp").asDouble());
-				module[i].setWire(cmd.Field("wire").asBool());
-				module[i].setPowered(cmd.Field("powered").asBool());
-				module[i].setStatus((Status)(int)cmd.Field("status").asLong());
-			}
+			#ifndef OFFLINE
+				cmd.setConnection(&con);
+				cmd.setCommandText(cmd_text.c_str());
+				cmd.Execute();
+				con.Commit();
+				while(cmd.FetchNext()) {
+					module[i].setName((std::string)cmd.Field("name").asString());
+					module[i].setTruncName((std::string)cmd.Field("truncName").asString());
+					module[i].setThresh1((float)cmd.Field("thresh1").asDouble());
+					module[i].setThresh2((float)cmd.Field("thresh2").asDouble());
+					module[i].setTemp((float)cmd.Field("temp").asDouble());
+					module[i].setWire(cmd.Field("wire").asBool());
+					module[i].setPowered(cmd.Field("powered").asBool());
+					module[i].setStatus((Status)(int)cmd.Field("status").asLong());
+				}
+			#endif
 		}
 	}
 }
